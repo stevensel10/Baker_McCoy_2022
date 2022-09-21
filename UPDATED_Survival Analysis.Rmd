@@ -1,0 +1,300 @@
+---
+title: "UPDATED_Survival Analysis"
+output: html_notebook
+---
+
+UPDATED SURVIVAL ANALYSIS as of 5/5/21
+
+
+
+Consolidated all survival data into one master csv
+
+-Status at time t = 1 = Alive, 0 = Dead
+
+
+
+First, loading the data
+
+```{r}
+survival <- read.csv(file = "~/Desktop/Survival_MASTER.csv",
+                             header = TRUE,
+                             sep = ",",
+                             stringsAsFactors = FALSE)
+
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(knitr)
+library(lubridate)
+library(survival)
+library(survminer)
+```
+
+Adding a column for proportion surviving at time points t: 
+
+```{r}
+survival <- survival %>%
+  mutate(
+    prop_surv = tads_remain/tads_start
+  )
+```
+
+Next, creating subset-data frames and plotting each interesting comparison with "Proportion Surviving" on the Y axis: 
+
+```{r}
+single_NLvC <- survival[1:160, 1:13]
+
+library(ggplot2)
+colors <- c("C_L_S" = "black", "NL_L_S" = "red")
+ggplot(single_NLvC, aes(x = time, y = prop_surv, color = ind_ID)) +
+    geom_point(size = .25) + 
+    scale_color_manual(values = colors, labels = c("C femoralis", "NL femoralis")) +
+    stat_smooth(method = "glm", method.args = list(family = "quasibinomial"), se = FALSE) +
+    labs(x = "Time (Hours)", y = "Proportion Surviving", title = "Femoralis Survival = Single-Sp. Assemblages") + 
+    theme_bw()
+```
+
+```{r}
+mixed_NLvC <- survival[161:320, 1:13]
+
+library(ggplot2)
+colors <- c("C_L_M" = "black", "NL_L_M" = "red")
+ggplot(mixed_NLvC, aes(x = time, y = prop_surv, color = ind_ID)) +
+    geom_point(size = .25) + 
+    scale_color_manual(values = colors, labels = c("C femoralis", "NL femoralis")) +
+    stat_smooth(method = "glm", method.args = list(family = "quasibinomial"), se = FALSE) +
+    labs(x = "Time (Hours)", y = "Proportion Surviving", title = "Femoralis Survival = Mixed-Sp. Assemblages (4 TADS)") + 
+    theme_bw()
+```
+
+
+
+RUNNING Initial model on FEMORALIS SURVIVAL:
+
+
+First, create a dataframe that contains only femoralis survival (across assemblages & induction types) :
+
+
+Now, for my GLM I have: 
+
+prop-surv = bound by 0 & 1 = continuous
+
+fixed effects = time, ind_type (NL or C) and assem_type (S or M)
+random effects = tank_num and (possibly?) block_ID
+
+error family = binomial (alive or dead)
+
+- I have column "status" (says whether you're 1 = alive, 0 = dead)...
+-Going to have "time" as a fixed effect, as the time point (hours passed) relates to your status (alive or dead)
+
+
+Mike edits from 3/4/21: 
+
+```{r}
+names(survival)
+
+survdat <- survival %>%
+  filter(
+    species =="Fe"
+  )
+
+#modeling survival
+library(broom)
+library(AICcmodavg)
+library(lme4)
+library(car)
+library(nnet)
+library(MASS)
+
+
+#OUR MODEL: with random effect of block_ID to make boot code work below
+library(blme)
+m2<-glmer(prop_surv~ind_ID*time+(1|block_ID),family=binomial,weights=tads_start,data=survdat)
+summary(m2)
+Anova(m2,type="III")
+```
+
+
+```{r}
+cis <- Confint(m2, estimate = TRUE)
+cis
+```
+
+Converting logit (coefficient) values to plogis scale (y probabilities):
+
+https://sebastiansauer.github.io/convert_logit2prob/
+
+
+
+```{r}
+#converting coefficients
+plogis(0.006)
+
+```
+
+
+```{r}
+#plotting RAW data
+library(ggplot2)       
+ggplot(data=survdat,aes(x=time,y=prop_surv,color=ind_ID, linetype=ind_ID))+
+    scale_color_manual(name="Treatments", 
+      labels=c("Control Mixed",
+               "Control Single",
+               "Non-lethal Mixed",
+               "Non-lethal Single"),
+      values=c(
+      C_L_S="black",
+      C_L_M="azure4",
+      NL_L_S="darkred",
+      NL_L_M="brown1"))+
+    scale_linetype_manual(values=c(
+      C_L_S="solid",
+      C_L_M="longdash",
+      NL_L_S="solid",
+      NL_L_M="longdash"))+
+    geom_point(size=0.25)+geom_smooth(size=1.15, method = "glm", 
+    method.args = list(family = "binomial"), 
+    se = FALSE)+
+    labs(title="Femoralis Survival")+
+    xlab("Time (Hours")+
+    ylab("Proportion Surviving")+
+    theme_light()
+```
+    
+```{r}
+#predicted values from our model m2
+library(dplyr)
+
+survdat$ind_ID<-as.factor(survdat$ind_ID)
+survdat$tank_num<-as.factor(survdat$tank_num)
+survdat$block_ID<-as.factor(survdat$block_ID)
+
+
+
+
+dataset=survdat
+boot_predict <- function(.) {
+  predict(., newdata=dataset, re.form=NULL)
+}
+
+
+#install.packages('TMB', type = 'source')
+bootSummary <- function(merBoot) {
+  return(
+    data.frame(fit = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.5, na.rm=TRUE))),
+               lwr = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.025, na.rm=TRUE))),
+               upr = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.975, na.rm=TRUE)))
+    )
+  )
+}
+
+merboot=bootMer(m2, boot_predict, nsim=1000, use.u=FALSE, type="parametric")
+bootstrap.PIs <- bootSummary(merboot)
+survframe=data.frame(dataset,bootstrap.PIs)
+
+
+library(dplyr)
+survframe %>% 
+  group_by(ind_ID,time) %>% 
+  summarise(fit = mean(fit),lwr=mean(lwr),upr=mean(upr)) -> survframe2
+survframe2
+
+```
+
+
+```{r}
+#adding column of assemblage type to model output
+library(dplyr)
+assemblage<-c("Mixed","Single")
+assemblages<-data.frame(assemblage)
+
+assemblages_new<-data.frame(assemblages[rep(seq_len(nrow(assemblages)),each=16),])
+assemblages_new
+names(assemblages_new)<-c("assemblage")
+
+assemblages_new2<-data.frame(assemblages[rep(seq_len(nrow(assemblages)),each=16),])
+assemblages_new2
+names(assemblages_new2)<-c("assemblage")
+
+assem_TOTAL <- data.frame(cbind(assemblages_new$assemblage,assemblages_new2$assemblage))
+assem_TOTAL
+
+assem_long <- data.frame(gather(assem_TOTAL,assemblage))
+assem_long
+names(assem_long)<-c("value","assem_type")
+
+final_survframe<-data.frame(cbind(survframe2,assem_long$assem_type))
+final_survframe
+names(final_survframe)<-c("ind_ID","time","fit","lwr","upr","assem_type")
+
+```
+
+
+```{r}
+#PLOTTING MODEL OUTPUT
+library(ggplot2)
+ggplot(aes(x=time,y=plogis(fit),ymin=plogis(lwr),ymax=plogis(upr),color=ind_ID,linetype=ind_ID),data=final_survframe)+
+  stat_summary(fun="mean",size=1,geom="line")+
+     scale_color_manual(name="Treatments", 
+      labels=c("Control Mixed",
+               "Control Single",
+               "Non-lethal Mixed",
+               "Non-lethal Single"),
+      values=c(
+      C_L_S="black",
+      C_L_M="azure4",
+      NL_L_S="darkred",
+      NL_L_M="brown1"))+
+    scale_linetype_manual(values=c(
+      C_L_S="solid",
+      C_L_M="longdash",
+      NL_L_S="solid",
+      NL_L_M="longdash"))+
+  labs(x="Time (hrs)",y="Proportion Surviving w/95% PI's")+
+  theme_bw()+theme(legend.position="right")
+```
+
+
+
+
+
+
+
+
+```{r}
+#intercepts & slope
+coef(m2)
+```
+
+
+```{r}
+#wrangling final survframe
+levels(final_survframe$ind_ID)<-list(Control_Mixed = "C_L_M", Control_Single = "C_L_S", Nonlethal_Mixed = "NL_L_M", Nonlethal_Single = "NL_L_S")
+names(final_survframe)
+```
+
+
+```{r}
+#MORE MODEL PLOTS : FACETS 
+library(ggplot2)
+ggplot(aes(x=time,y=plogis(fit),ymin=plogis(lwr),ymax=plogis(upr),color=ind_ID, linetype=ind_ID),data=final_survframe)+
+  geom_ribbon(aes(alpha=.1),fill="grey80")+geom_line(size=1)+
+     scale_color_manual(
+       values=c(
+      Control_Single="black",
+      Control_Mixed="azure4",
+      Nonlethal_Single="darkred",
+      Nonlethal_Mixed="brown1"))+
+    scale_linetype_manual(values=c(
+      Control_Single="solid",
+      Control_Mixed="dashed",
+      Nonlethal_Single="solid",
+      Nonlethal_Mixed="dashed"))+
+  labs(x="Time (hrs)",y="Proportion Surviving w/95% PI's")+
+  theme_bw()+theme(legend.position="right")+
+  facet_wrap(~ind_ID)
+```
+
+
+```{r}
+```{r}
