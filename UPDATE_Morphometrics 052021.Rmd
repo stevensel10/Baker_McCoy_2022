@@ -1,0 +1,557 @@
+---
+title: "UPDATE_Morphometrics 042821"
+output: html_notebook
+---
+
+MORPHOMETRIC ANALYSIS: 92 tadpoles total 
+-49 NL tads
+-42 C tads
+
+Reference workflow: Emma Sherratt file:///Users/ellie/Downloads/quick_guide_to_geomorph-_introduction.html
+
+
+Link for referencing "procD.lm" function: https://www.rdocumentation.org/packages/geomorph/versions/3.3.2/topics/procD.lm
+
+Regressions : https://raw.githubusercontent.com/geomorphR/geomorph/Stable/vignettes/geomorph.assistance.Rmd
+
+
+Geomorph packages as of 04/2021: https://cran.r-project.org/web/packages/geomorph/vignettes/geomorph.functions.html
+
+
+GMM tutorial: https://rdrr.io/github/katrinajones/qpal/f/vignettes/GMM_Tutorial.Rmd
+
+
+
+
+```{r}
+#loading packages
+library(geomorph)
+library(ggplot2)
+library(shapes)
+library(svd)
+library(scatterplot3d)
+library(rgl)
+library(MASS)
+library(ape)
+library(vegan)
+library(RRPP)
+library(rgl)
+library(permute)
+library(lattice)
+
+#loading the new text file with discrete variables
+femlands <- read.table(file="~/Desktop/New Lateral Tads_Fem.txt",header=TRUE,
+stringsAsFactors = FALSE) 
+
+is.numeric(femlands)
+```
+
+
+```{r}
+#forcing landmark coordinates to be numeric with as.matrix (minus the first 4 columns)
+coords <- as.matrix(femlands[,-(1:4)])
+is.numeric(coords)
+```
+
+```{r}
+#converting discrete variables to factors 
+femlands$treatment=as.factor(femlands$treatment)
+femlands$tad_ID=as.factor(femlands$tad_ID)
+femlands$block_ID=as.factor(femlands$block_ID)
+str(femlands)
+```
+
+```{r}
+#convert our coords matrix into an array (each row contains all coordinates for a single specimen: 21 landmarks per tad)
+array_fem <- arrayspecs(coords,21,2)
+
+#just viewing tad_num 1's coordinate array to see if it worked: 
+array_fem[,,1]
+
+```
+
+```{r}
+#perform a GPA
+library(geomorph)
+gpa1 <- gpagen(array_fem, 
+       curves = NULL, 
+       surfaces = NULL,
+       PrinAxes = TRUE,
+       max.iter = NULL,
+       ProcD = FALSE,
+       Proj = TRUE,
+       print.progress = TRUE
+       )
+print(gpa1)
+```
+
+```{r}
+#viewing the Procrustes analysis results on a grid
+plotAllSpecimens(array_fem)
+plot(gpa1)
+
+```
+
+```{r}
+#create a new dataframe with GPA results & discrete variables
+gdf <- geomorph.data.frame(gpa1, treatment=femlands$treatment, tank_num=femlands$tad_ID)
+gdf
+```
+
+```{r}
+#Initial model + ANOVA 
+
+#mod1: Procrustes analysis coordinates & treatment
+
+#RRPP = Randomized Residual permutation procedure: Should the argument "RRPP=" be TRUE or FALSE?
+mod1 <- procD.lm(coords~treatment, data=gdf, iter=999, RRPP=TRUE, print.progress=FALSE)
+anova(mod1)
+
+```
+
+
+```{r}
+#running a PCA: gives us a plot and principle components, eigenvalues
+PCA1 <- gm.prcomp(gpa1$coords)
+summary(PCA1)
+
+#plotting the PCA
+plot(PCA1, main="PCA1")
+
+#plotting PCA scores for each specimen
+#outlier near .20, color the points
+plot(PCA1$x)
+
+```
+
+```{r}
+#looking at outliers of PCA plot, looks like it's specimen #30 that's the major outlier?
+out_PCA1 <- plot(mod1, type="diagnostics", outliers=TRUE)
+out_PCA1
+
+```
+
+
+```{r}
+#removing specimen #30 from the array and re-running GPA, PCA plots
+array_fem_new <- array_fem[,,-30]
+array_fem_new
+
+#re-running the GPA
+library(geomorph)
+gpa_new <- gpagen(array_fem_new, 
+       curves = NULL, 
+       surfaces = NULL,
+       PrinAxes = TRUE,
+       max.iter = NULL,
+       ProcD = FALSE,
+       Proj = TRUE,
+       print.progress = TRUE
+       )
+print(gpa_new)
+
+#plotting new Procrustes coordinates
+plotAllSpecimens(array_fem_new)
+plot(gpa_new)
+
+#checking outliers to make sure specimen #30 does not pop up/was indeed removed
+plotOutliers(gpa_new$coords, inspect.outliers = TRUE)
+
+#new geomorph data frame without specimen 30
+femlands_new <- femlands[-30,]
+femlands_new
+
+gdf_new <- geomorph.data.frame(gpa_new, treatment=femlands_new$treatment, tank_num=femlands_new$tad_ID)
+gdf_new
+```
+
+
+```{r}
+#re-running model, so we can use in new PCA plots
+#PERMUTATIONAL Anova that I report: 
+mod1_new <- procD.lm(coords~treatment, data=gdf_new, iter=999, RRPP=TRUE, print.progress=FALSE)
+summary(mod1_new)
+anova.lm.rrpp(mod1_new)
+```
+
+```{r}
+#new PCA plot without specimen #30
+PCA_new <- gm.prcomp(gpa_new$coords)
+summary(PCA_new)
+
+#plotting the PCA
+plot(PCA_new, main="PCA Without Specimen 30")
+
+#plotting PCA scores for each specimen
+plot(PCA_new$x)
+```
+
+
+Code to run MANOVA's on PC scores: 
+
+-Investigating the affect of 1 independent variable (treatment) on multiple dependent variables (multiple PC scores)
+
+http://rstudio-pubs-static.s3.amazonaws.com/8311_eef838dfa3d14f84ba1bab795292990f.html
+
+
+```{r}
+#running a MANOVA : affect of treatment on PC scores 1-5 containing 66.47% of the variance
+
+#Using base R PCA function
+gpa_new_2d <- two.d.array(gpa_new$coords)
+gpa_new_wholePCA <- prcomp(gpa_new_2d)
+
+#Organizing PCA component scores into a dataframe with treatment type
+gpa_newPCA <- data.frame(gpa_new_wholePCA$x[,1],gpa_new_wholePCA$x[,2],gpa_new_wholePCA$x[,3],gpa_new_wholePCA$x[,4],gpa_new_wholePCA$x[,5])
+gpa_newPCA <- data.frame(gpa_newPCA,femlands_new$treatment)
+names(gpa_newPCA) <- c("PC1","PC2","PC3","PC4","PC5","treatment")
+
+
+```
+
+```{r}
+#trying permutational anova's....not sure if this is what I want?
+
+#Permutational Multivariate Analysis of Variance using distance matrices.....
+#----not what I'm doing below.....too simple of a procedure
+#need to calculate procrustes distances with coordinates...didn't do so here
+#can choose from a multitude of methods
+
+permanov <- adonis(formula=cbind(PC1,PC2,PC3,PC4,PC5)~treatment, data=gpa_newPCA, method="euclidean", permutations = 999)
+print(permanov)
+```
+
+
+```{r}
+#trying another permutational anova
+
+#creating a data frame with a geometric morphometric measure of shape difference (Centroid sizes) & our predictor (treatment)
+newdf <- as.data.frame(gdf_new$Csize)
+newdf <- data.frame(cbind(newdf, gdf_new$treatment))
+newdf
+names(newdf) <- c("Csize","treatment")
+
+
+permanov2 <- adonis(Csize~treatment, data=newdf, method="euclidean", permutations=999)
+print(permanov2)
+```
+
+
+```{r}
+#translating PC scores back into original shape variables (landmarks)
+pcscores <- PCA_new$x
+eigenvectors <- PCA_new$rotation
+#concensus shape
+ref_main <- mshape(gdf_new$coords)
+
+#calculating concensus shape 
+scores <- c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0) #pc scores of concensus shape
+shape <- scores*eigenvectors
+shape <- matrix(shape,nrow=21,ncol=2,byrow=T) #will all be zeroes for concensus shape
+shape
+
+shape_new <- shape+ref_main
+shape_new
+
+```
+
+
+```{r}
+#Now, can calculate the shape at any point in morphospace. Example = What does a positive loading of 0.5 on PC1 look like?
+#trying to  investigate what landmarks/aspects of morphology relate to which components
+#can substitute values in for any of the 38 components and look at the plot to see what it does to morphology 
+scores_2 <- c(0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+shape <- scores_2*eigenvectors
+shape <- matrix(shape,nrow=21,ncol=2,byrow=T)
+
+shape <- shape+ref_main
+plotRefToTarget(ref_main,shape)
+```
+
+
+```{r}
+#Creating subsets of landmark data for each treatment type: Data-wrangling
+data(femlands_new)
+colnames(femlands_new)
+
+library(tidyverse)
+library(dplyr)
+group_NL <- femlands_new %>%
+  filter(treatment=="NL") %>%
+  select(tad_ID, treatment, block_ID, tad_num, X1X:X21Y)
+
+group_NL
+
+group_C <- femlands_new %>%
+        filter(treatment=="C") %>%
+        select(tad_ID, treatment, block_ID, tad_num, X1X:X21Y)
+
+group_C
+
+#arrays
+coords_NL <- as.matrix(group_NL[,-(1:4)])
+is.numeric(coords_NL)
+coords_C <- as.matrix(group_C[,-(1:4)])
+is.numeric(coords_C)
+
+
+array_femNL <- arrayspecs(coords_NL,21,2)
+array_femNL[,,1]
+
+array_femC <- arrayspecs(coords_C,21,2)
+array_femC[,,1]
+```
+
+```{r}
+#running GPA's on each treatment type: creating shape variables
+gpa2 <- gpagen(array_femNL, 
+       curves = NULL, 
+       surfaces = NULL,
+       PrinAxes = TRUE,
+       max.iter = NULL,
+       ProcD = FALSE,
+       Proj = TRUE,
+       print.progress = TRUE
+       )
+print(gpa2)
+
+gpa3 <- gpagen(array_femC, 
+       curves = NULL, 
+       surfaces = NULL,
+       PrinAxes = TRUE,
+       max.iter = NULL,
+       ProcD = FALSE,
+       Proj = TRUE,
+       print.progress = TRUE
+       )
+print(gpa3)
+
+
+```
+
+```{r}
+library(graphics)
+#NL GPA
+plot(gpa2)
+#C GPA
+plot(gpa3)
+```
+
+
+
+```{r}
+#calculating mean shape from each GPA for each treatment group
+NL <- gpa2$coords
+ref1 <- mshape(NL, na.action=1)
+ref1
+
+C <- gpa3$coords
+ref2 <- mshape(C, na.action=1)
+ref2
+```
+
+```{r}
+#concensus shape = mshape
+ref_main <- mshape(gpa_new$coords)
+plotRefToTarget(ref_main,gpa_new$coords[,,91])
+
+
+#Looking at treatment group means vs. treatment group Procrustes coordinates for all treatment specimens
+
+#I think this shows that NL tads overall had smaller heads, deeper tail fins (distance from dorsal to ventral edge), and perhaps slightly longer tails?
+ref_NL <- mshape(gpa2$coords)
+plotRefToTarget(ref_NL,gpa2$coords[,,49])
+
+#C tads seem to have an overall proportionate body shape: heads are larger in comparison to NL, and tails not as deep in relation to head size
+ref_C <- mshape(gpa3$coords)
+plotRefToTarget(ref_C,gpa3$coords[,,42])
+
+```
+
+
+
+https://github.com/cran/geomorph/blob/master/R/plotRefToTarget.r
+
+
+
+```{r}
+#You can play around with the "mag" & "method" parameter
+
+#first term = reference specimen, second term=target specimen
+#ref1 = NL, ref2 = C
+
+
+#playing with colors of points - these might be nice overlay images for the PCA plots
+#reference specimen is highlighted in red, target is black 
+plotRefToTarget(ref1, ref2, method="points",mag=5,gridPars=gridPar(pt.bg = "red", pt.size = 1.25))
+
+#Making ref2 (Control tads) the reference specimen, and ref1 (NL tads) the target
+plotRefToTarget(ref2, ref1, method="points",mag=4,gridPars=gridPar(pt.bg = "lightgrey", pt.size = 1.25))
+
+#vector method
+#reference specimen (gray dots with arrows) moving towards target specimen shape (black dots)
+
+#overall concensus shape, moving towards mean NL treatment group shape
+plotRefToTarget(ref_main,ref_NL,method=c("vector"),mag=5)
+plotRefToTarget(ref_main,ref_NL,method=c("vector"),mag=10)
+plotRefToTarget(ref_main,ref_NL,method=c("vector"),mag=20)
+
+
+#overall concensus shape, moving towards mean NL treatment group shape
+plotRefToTarget(ref_main,ref_C,method=c("vector"),mag=20)
+
+```
+Grey = NL tads
+Black =  C tads
+
+
+Reference this site: 
+
+http://creativemorphometrics.co.vu/blog/2014/02/23/r-generator-and-a-colorful-pca/
+
+
+
+```{r}
+#plotting PCA's of each treatment type just to see
+PCA_NL <- gm.prcomp(gpa2$coords)
+PCA_NL
+plot(PCA_NL, main="NL")
+PCA_C <- gm.prcomp(gpa3$coords)
+PCA_C
+plot(PCA_C, main="C")
+```
+
+
+```{r}
+#Calculating mean PCA scores for PC1-PC5 per treatment type
+meangpa_newPCA1 <- aggregate(gpa_newPCA[,1], mean, by=list(gpa_newPCA[,6]))
+names(meangpa_newPCA1)<-c("treatment","PC1_score")
+meangpa_newPCA2 <- aggregate(gpa_newPCA[,2], mean, by=list(gpa_newPCA[,6]))
+names(meangpa_newPCA2)<-c("treatment","PC2_score")
+meangpa_newPCA3 <- aggregate(gpa_newPCA[,3], mean, by=list(gpa_newPCA[,6]))
+names(meangpa_newPCA3)<-c("treatment","PC3_score")
+meangpa_newPCA4 <- aggregate(gpa_newPCA[,4], mean, by=list(gpa_newPCA[,6]))
+names(meangpa_newPCA4)<-c("treatment","PC4_score")
+meangpa_newPCA5 <- aggregate(gpa_newPCA[,5], mean, by=list(gpa_newPCA[,6]))
+names(meangpa_newPCA5)<-c("treatment","PC5_score")
+meangpa_newPCA <- data.frame(meangpa_newPCA1,meangpa_newPCA2[,2],meangpa_newPCA3[,2],meangpa_newPCA4[,2],meangpa_newPCA5[,2])
+names(meangpa_newPCA) <- c("treatment","PC1","PC2","PC3","PC4","PC5")
+
+
+#plotting
+#pcaplot <- pcaplot + geom_point(data = meangpa_newPCA,size=5,aes(color=treatment,shape=treatment)) + geom_text(data = meangpa_newPCA, size = 5, label = meangpa_newPCA$treatment, vjust = -0.9) 
+#pcaplot
+
+library (ggplot2)
+library(ggforce)
+data=gpa_newPCA
+pcaplot <- ggplot(gpa_newPCA, aes(x=PC1, y=PC2, group = treatment, shape=treatment)) + geom_point(size = 1.25, aes(color=treatment)) +
+     scale_color_manual(name="Treatments", 
+      labels=c(
+        C="Control",
+      NL="Non-Lethal"
+      ),                  
+      values=c(
+      C="black",
+      NL ="red"))+
+  xlab("PC1 : 23.99%")+
+  ylab("PC2 : 14.37%")+
+  geom_vline(xintercept = 0.0,linetype="dashed",color="grey50")+
+  geom_hline(yintercept = 0.0,linetype="dashed",color="grey50")+
+  theme_bw()
+pcaplot <- pcaplot + geom_point(data = meangpa_newPCA,size=5,aes(color=treatment,shape=treatment)) + geom_text(data = meangpa_newPCA, size = 5, label = meangpa_newPCA$treatment, vjust = -0.9) 
+pcaplot
+
+```
+
+
+```{r}
+pcaplot2 <- ggplot(gpa_newPCA, aes(x=PC1, y=PC2, group = treatment, shape=treatment)) + 
+  geom_point(size = 1.25, aes(color=treatment))+
+       scale_color_manual(values=c(
+      C="black",
+      NL ="red"))+
+  geom_mark_ellipse(expand=0,aes(color=treatment))+
+  xlab("PC1 : 23.99%")+
+  ylab("PC2 : 14.37%")+
+  theme_bw()
+
+pcaplot2 <- pcaplot2 + geom_point(data = meangpa_newPCA,size=5,aes(color=treatment,shape=treatment)) + 
+  geom_text(data = meangpa_newPCA, size = 5, label = meangpa_newPCA$treatment, vjust = -0.9) 
+pcaplot2
+
+```
+
+```{r}
+#more plots
+pcaplot3 <- ggplot(gpa_newPCA, aes(x=PC1, y=treatment, group = treatment, shape=treatment)) + 
+  geom_point(size = 2, aes(color=treatment))+
+       scale_color_manual(values=c(
+      C="black",
+      NL ="red"))+
+  scale_x_continuous(limits=c(-0.09,0.09))+
+  theme_bw()
+pcaplot3<- pcaplot3 + geom_point(data = meangpa_newPCA,size=5,aes(color=treatment,shape=treatment)) + 
+  geom_text(data = meangpa_newPCA, size = 5, label = meangpa_newPCA$treatment, vjust = -0.9)
+pcaplot3
+
+
+
+pcaplot4 <- ggplot(gpa_newPCA, aes(x=PC2, y=treatment, group = treatment, shape=treatment)) + 
+  geom_point(size = 2, aes(color=treatment))+
+       scale_color_manual(values=c(
+      C="black",
+      NL ="red"))+
+  scale_x_continuous(limits=c(-0.09,0.09))+
+  theme_bw()
+pcaplot4 <- pcaplot4 + geom_point(data = meangpa_newPCA,size=5,aes(color=treatment,shape=treatment)) + 
+  geom_text(data = meangpa_newPCA, size = 5, label = meangpa_newPCA$treatment, vjust = -0.9)
+pcaplot4
+```
+```{r}
+#PC3 & 4 ellipses
+pcaplot_34 <- ggplot(gpa_newPCA, aes(x=PC3, y=PC4, group = treatment, shape=treatment)) + 
+  geom_point(size = 1.25, aes(color=treatment))+
+       scale_color_manual(values=c(
+      C="black",
+      NL ="red"))+
+  geom_mark_ellipse(expand=0,aes(color=treatment))+
+  xlab("PC3 : 12.13%")+
+  ylab("PC4 : 8.63%")+
+  theme_bw()
+
+pcaplot_34 <- pcaplot_34 + geom_point(data = meangpa_newPCA,size=5,aes(color=treatment,shape=treatment)) + geom_text(data = meangpa_newPCA, size = 5, label = meangpa_newPCA$treatment, vjust = -0.9) 
+pcaplot_34
+```
+
+
+```{r}
+#plotting PC4 and 5
+pcaplot_45 <- ggplot(gpa_newPCA, aes(x=PC4, y=PC5, group = treatment, shape=treatment)) + 
+  geom_point(size = 1.25, aes(color=treatment))+
+       scale_color_manual(values=c(
+      C="black",
+      NL ="red"))+
+  geom_mark_ellipse(expand=0,aes(color=treatment))+
+  xlab("PC4 : 8.63%")+
+  ylab("PC5 : 7.35%")+
+  theme_bw()
+
+pcaplot_45 <- pcaplot_45 + geom_point(data = meangpa_newPCA,size=5,aes(color=treatment,shape=treatment)) + geom_text(data = meangpa_newPCA, size = 5, label = meangpa_newPCA$treatment, vjust = -0.9) 
+pcaplot_45
+```
+
+
+```{r}
+#Sys.setenv(R_REMOTES_NO_ERRORS_FROM_WARNINGS="true")
+#library(devtools)
+#install_github("vqv/ggbiplot")
+
+#library(ggbiplot)
+
+
+
+#ggbiplot(gpa_newPCA,ellipse = TRUE,choices=c(1,2),labels=colnames(gpa_newPCA),groups=gpa_newPCA$treatment)
+
+```
+
