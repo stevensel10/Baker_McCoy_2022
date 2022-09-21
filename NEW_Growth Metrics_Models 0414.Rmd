@@ -1,0 +1,418 @@
+---
+title: "NEW_Growth Metrics_Models 041421"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+SVL Data: SVL's on femoralis tads (from both single- and mixed species assemblages)
+
+```{r}
+#loading packages
+library(predictionInterval)
+library(coefplot2)
+library(merTools)
+#library(AICcmodavg)
+library(brms)
+library(utils)
+library(dbplyr)
+library(TMB)
+library(glmmTMB)
+library(stats)
+library(finalfit)
+library(boot)
+library(lme4)
+library(MCMCglmm)
+library(blme)
+library(pbkrtest)
+library(coda)
+library(aods3)
+library(bbmle)
+library(ggplot2)
+library(reshape2)
+library(plyr)
+library(numDeriv)
+library(Hmisc)
+library(plotMCMC)
+library(gridExtra)
+library(R2admb)
+library(tibble)
+library(tidyverse)
+library(car)
+library(MASS)
+library(stats4)
+library(readr)
+
+
+SVL <- read.csv(file = "~/Desktop/SVL_Fem.csv",
+                             header = TRUE,
+                             sep = ",",
+                             stringsAsFactors = FALSE)
+```
+
+
+```{r}
+theme_set(theme_bw())
+library("grid")          ## for unit() (base R)
+zmargin <- theme(panel.margin=unit(0,"lines")) ## to squash facets together ...
+```
+
+```{r}
+library(blme)
+library(car)
+library(nnet)
+library(MASS)
+
+
+#running our model
+m1_svl2 <- bglmer(svl_cm~assem_type*ind_type+(1|tank_num),data=SVL,family=gaussian(link=log))
+m1b_svl2 <- blmer(log(svl_cm)~assem_type*ind_type+(1|tank_num),data=SVL)
+ICtab(m1_svl2,m1b_svl2,type="AICc")
+summary(m1b_svl2)
+Anova(m1b_svl2, type="III")
+```
+
+```{r}
+#Diagnostics
+plot(m1b_svl2)
+qqnorm(resid(m1b_svl2))
+qqline(resid(m1b_svl2))
+library(visreg)
+visreg(m1_svl2, "ind_type" ,by = "assem_type")
+```
+
+```{r}
+
+SVL$ind_type=as.factor(SVL$ind_type)
+SVL$assem_type=as.factor(SVL$assem_type)
+SVL$trmt_ID=factor(SVL$trmt_ID, levels=c("NL_C_S", "C_C_S", "NL_C_M", "C_C_M"))
+str(SVL)
+
+
+library(dotwhisker)
+dotwhisker::dwplot(m1_svl2,effects="fixed",by_2sd=FALSE)
+#rr <- "http://www.math.mcmaster.ca/bolker/R"
+#install.packages(c("coefplot2"),type="source",
+                # repos=rr)
+coeftab(m1b_svl2)[,c("Estimate","2.5%","97.5%")]
+coefplot2(m1b_svl2)
+predict(m1b_svl2,type="response",se=TRUE)
+```
+
+```{r}
+dataset=SVL
+boot_predict <- function(.) {
+  predict(., newdata=dataset, re.form=NULL)
+}
+
+
+
+#install.packages('TMB', type = 'source')
+bootSummary <- function(merBoot) {
+  return(
+    data.frame(fit = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.5, na.rm=TRUE))),
+               lwr = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.025, na.rm=TRUE))),
+               upr = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.975, na.rm=TRUE)))
+    )
+  )
+}
+
+merboot=bootMer(m1b_svl2, boot_predict, nsim=200, use.u=FALSE, type="parametric")
+bootstrap.PIs <- bootSummary(merboot)
+pframe=data.frame(dataset,bootstrap.PIs)
+library(dplyr)
+pframe %>% 
+  group_by(ind_type, assem_type) %>% 
+  summarise(fit = mean(fit),lwr=mean(lwr),upr=mean(upr)) -> pframe2
+
+
+#renaming factors for plots
+levels(pframe2$assem_type) <-list(Mixed="M",Single="S")
+levels(pframe2$assem_type)
+levels(pframe2$ind_type) <-list(Nonlethal="NL", Control="C")
+levels(pframe2$ind_type)
+
+#transforming logged data
+pframe2$expfit <- exp(pframe2$fit)
+pframe2$explwr <- exp(pframe2$lwr)
+pframe2$expupr <- exp(pframe2$upr)
+pframe2
+
+```
+
+
+```{r}
+library(ggplot2)
+ggplot(aes(x=ind_type, y=expfit, ymin=explwr, ymax=expupr, color=assem_type), data=pframe2) +
+  geom_point(size=4,position = position_dodge(w = 0.75))+
+  geom_errorbar(position = position_dodge(w = 0.75)) +
+  geom_line(aes(group=assem_type),position = position_dodge(w = 0.75))+
+  ylim(1.00,1.40)+
+  labs(colour="Assemblage Type",x="Induction Treatment", y="SVL (cm) w/ 95% PIs") +
+  theme_bw() +  theme(legend.position="right") +
+  scale_color_brewer(type = "qual", palette = 2)
+```
+
+Plotting the raw SVL data:
+
+```{r}
+library(ggplot2)
+library(scales)
+
+ind_labs <- c("Control", "Non-Lethal")
+names(ind_labs) <- c("C", "NL")
+
+
+ggplot(SVL, aes(x=assem_type, y=svl_cm, fill=assem_type))+
+  geom_boxplot(size=.75, point=TRUE)+
+  geom_jitter(aes(colour=assem_type), alpha=0.3)+
+  scale_fill_manual(values = c("darkseagreen4","darkorange2"))+
+  stat_summary(fun.y = "mean", geom = "point", shape = 15, size = 2)+
+  labs(title="Femoralis Snout-Vent Lengths", x="Assemblage Type", y="Femoralis SVL (cm)")+
+  facet_wrap(~ind_type, labeller = labeller(ind_type = ind_labs))+
+  scale_color_brewer(type="qual", palette=2)+
+  theme_bw()
+```
+
+
+MASS Data: Emergence-day mass -
+
+
+```{r}
+Emass <- read.csv(file = "~/Desktop/Masses_Fem.csv",
+                             header = TRUE,
+                             sep = ",",
+                             stringsAsFactors = FALSE)
+
+
+#Run the model
+m1_mass <- glmer(emerg_grams~assem_type*ind_type+(1|tank_num),data=Emass,family=gaussian(link=log))
+summary(m1_mass)
+Anova(m1_mass, type="III")
+```
+
+```{r}
+#plotting residuals & model diagnostics - Looks acceptable to me! Generally homoschedastic
+plot(m1_mass,idLabels=~.obs,id=.1)
+qqnorm(resid(m1_mass))
+qqline(resid(m1_mass))
+
+#plotting residuals without outlier #9
+
+
+library(visreg)
+visreg(m1_mass, "ind_type" ,by = "assem_type")
+##Observation 9 looks to be an outlier
+Emass[7:10,]
+```
+
+```{r}
+#Run the model with outlier removed - need to check on it: Outlier=9
+new_Emass <- data.frame(Emass[-9,])
+m1b_mass <- lmer(log(emerg_grams)~assem_type*ind_type+(1|tank_num),data=new_Emass)
+summary(m1b_mass)
+Anova(m1b_mass)
+m1c_mass <- glmer((emerg_grams)~assem_type*ind_type+(1|tank_num),data=new_Emass,family=gaussian(link=log))
+ICtab(m1b_mass,m1c_mass,type="AICc")
+```
+
+
+```{r}
+#plotting residuals without outlier #9
+# I know have outliers 34, 35 and 47 as well 
+plot(m1b_mass,idLabels=~.obs,id=.1)
+qqnorm(resid(m1b_mass))
+qqline(resid(m1b_mass))
+```
+https://www.ssc.wisc.edu/sscc/pubs/MM/MM_DiagInfer.html
+
+https://www.ssc.wisc.edu/sscc/pubs/RFR/RFR_Diagnostics.html
+
+https://dfzljdn9uc3pi.cloudfront.net/2020/9522/1/MixedModelDiagnostics.html
+
+```{r}
+#diagnostics for leverage
+#need to write a model WITH the outlier in it first 
+new_mass <- lmer(log(emerg_grams)~assem_type*ind_type+(1|tank_num),data=Emass)
+summary(new_mass)
+
+#viewing influence plots of new_mass that includes ALL observations
+library(influence.ME)
+infl <- influence(new_mass, obs=TRUE)
+plot(infl)
+plot(infl,which="cook")
+influencePlot(new_mass)
+
+#viewing influence plots with outlier #9 removed
+infl_9 <- influence(m1b_mass,obs=TRUE)
+plot(infl_9,which="cook")
+influencePlot(m1b_mass)
+
+
+
+#new model with additional outliers #34, 35 & 47 removed
+newEmass2 <- data.frame(new_Emass[-34,])
+newEmass3 <- data.frame(newEmass2[-33,])
+newEmass4 <- data.frame(newEmass3[-44,])
+new_mass2 <- lmer(log(emerg_grams)~assem_type*ind_type+(1|tank_num),data=newEmass4)
+summary(new_mass2)
+Anova(new_mass2)
+
+#plotting influence with outliers #34, 35 & 47 removed
+#plots look like I'm chasing the outlier bubble....
+library(influence.ME)
+infl_outs <- influence(new_mass2,obs=TRUE)
+plot(infl_outs,which="cook")
+
+```
+
+
+```{r}
+##although the AIC is better for the glmer, diagnostics below suggest that the lmer on log-transformed data is better due to nonlinearity rather than just log normal error structure
+summary(m1c_mass)
+fixef(m1b_mass)
+fixef(m1c_mass)
+Anova(m1c_mass, type="III")
+Anova(m1b_mass, type="III")
+```
+
+
+```{r}
+par(mfrow=c(1,2))
+plot(m1c_mass,idLabels=~.obs,id=.1)
+plot(m1b_mass,idLabels=~.obs,id=.1,title="log(mass)")
+par(mfrow=c(1,2))
+qqnorm(resid(m1c_mass))
+qqline(resid(m1c_mass))
+qqnorm(resid(m1b_mass),title="log(mass)")
+qqline(resid(m1b_mass))
+```
+
+
+```{r}
+sc1=ggplot(fortify.merMod(m1b_mass),
+       aes(x=.fitted,y=sqrt(abs(.scresid))))+geom_point()+
+    geom_smooth(colour="red",alpha=0.3)+ggtitle("log(mass")
+sc2=ggplot(fortify.merMod(m1c_mass),
+       aes(x=.fitted,y=sqrt(abs(.scresid))))+geom_point()+
+    geom_smooth(colour="red",alpha=0.3)
+grid.arrange(sc1,sc2,ncol=2)
+library(visreg)
+visreg(m1b_mass, "ind_type" ,by = "assem_type")
+```
+
+```{r}
+Emass$ind_type=as.factor(Emass$ind_type)
+Emass$assem_type=as.factor(Emass$assem_type)
+Emass$trmt_ID=factor(Emass$trmt_ID, levels=c("NL_C_S", "C_C_S", "NL_C_M", "C_C_M"))
+str(Emass)
+
+
+#a look at Regression estimates, with and without random effects. Nothing significant here
+library(dotwhisker)
+library(coefplot2)
+dotwhisker::dwplot(m1b_mass,effects="fixed",by_2sd=FALSE)
+#rr <- "http://www.math.mcmaster.ca/bolker/R"
+#install.packages(c("coefplot2"),type="source",
+                # repos=rr)
+coeftab(m1b_mass)[,c("Estimate","2.5%","97.5%")]
+coefplot2(m1_mass)
+predict(m1b_mass,type="response",se=TRUE)
+```
+
+```{r}
+#predicted values and confidence intervals
+dataset1=Emass
+boot_predict <- function(.) {
+  predict(., newdata=dataset1, re.form=NULL)
+}
+
+
+library(TMB)
+bootSummary <- function(merBoot) {
+  return(
+    data.frame(fit = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.5, na.rm=TRUE))),
+               lwr = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.025, na.rm=TRUE))),
+               upr = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.975, na.rm=TRUE)))
+    )
+  )
+}
+
+
+
+merboot=bootMer(m1b_mass, boot_predict, nsim=200, use.u=FALSE, type="parametric")
+bootstrap.PIs <- bootSummary(merboot)
+mass.frame=data.frame(dataset1,bootstrap.PIs)
+library(dplyr)
+mass.frame %>% 
+  group_by(ind_type, assem_type) %>% 
+  summarise(fit = mean(fit),lwr=mean(lwr),upr=mean(upr)) -> mass.frame2
+
+#renaming factors for plots
+levels(mass.frame2$assem_type)<-list(Mixed="M",Single="S")
+print(mass.frame2)
+levels(mass.frame2$ind_type)<-list(Nonlethal="NL", Control="C")
+mass.frame2
+
+#transforming logged data
+mass.frame2$expfit <- exp(mass.frame2$fit)
+mass.frame2$explwr <- exp(mass.frame2$lwr)
+mass.frame2$expupr <- exp(mass.frame2$upr)
+mass.frame2
+```
+
+
+```{r}
+library(ggplot2)
+ggplot(aes(x=ind_type, y=expfit, ymin=explwr, ymax=expupr, color=assem_type), data=mass.frame2) +
+  geom_point(size=4,position = position_dodge(w = 0.75))+
+  geom_errorbar(position = position_dodge(w = 0.75)) +
+  geom_line(aes(group=assem_type),position = position_dodge(w = 0.75))+
+  ylim(.15,.40)+
+  labs(colour="Assemblage Type",x="Induction Treatment", y="Mass (g) w/ 95% PIs") +
+  theme_bw() +  theme(legend.position="right") +
+  scale_color_brewer(type = "qual", palette = 2)
+
+```
+Plotting the raw Emergence-Date mass data: 
+
+```{r}
+library(ggplot2)
+library(scales)
+
+ind_labs <- c("Control", "Non-Lethal")
+names(ind_labs) <- c("C", "NL")
+
+
+ggplot(Emass[-9,], aes(x=assem_type, y=emerg_grams, fill=assem_type))+
+  geom_boxplot(size=.75, point=TRUE)+
+  geom_jitter(aes(colour=assem_type), alpha=0.3)+
+  scale_fill_manual(values = c("darkseagreen4","darkorange2"))+
+  stat_summary(fun.y = "mean", geom = "point", shape = 15, size = 2)+
+  labs(title="Femoralis Emergence-Date Masses", x="Assemblage Type", y="Mass (g)")+
+  facet_wrap(~ind_type, labeller = labeller(ind_type = ind_labs))+
+  scale_color_brewer(type="qual", palette=2)+
+  theme_bw()
+```
+
+CODE I MAY NEED LATER:
+
+pkgs_CRAN <- c("lme4","MCMCglmm","blme",
+               "pbkrtest","coda","aods3","bbmle","ggplot2",
+               "reshape2","plyr","numDeriv","Hmisc",
+               "plotMCMC","gridExtra","R2admb","pbkrtest")
+install.packages(pkgs_CRAN)
+
+
+rr <- "http://www.math.mcmaster.ca/bolker/R"
+install.packages(c("glmmADMB","coefplot2"),type="source",
+                 repos=rr)
+
+
+
+install.packages("TMB", type="source")
+install.packages("glmmTMB", type="source")
+
+library(rhub)
+install.packages("glmmTMB", repos="https://glmmTMB.github.io/glmmTMB/repos", type="binary")
