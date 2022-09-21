@@ -1,0 +1,210 @@
+---
+title: "Time-to Emergence_Models_042121"
+output: html_notebook
+---
+
+TIME-TO EMERGENCE Models as of 042121
+
+```{r}
+#load packages and data
+#loading packages
+library(predictionInterval)
+library(coefplot2)
+library(merTools)
+#library(AICcmodavg)
+library(brms)
+library(utils)
+library(dbplyr)
+library(TMB)
+library(glmmTMB)
+library(stats)
+library(finalfit)
+library(boot)
+library(lme4)
+library(MCMCglmm)
+library(blme)
+library(pbkrtest)
+library(coda)
+library(aods3)
+library(bbmle)
+library(ggplot2)
+library(reshape2)
+library(plyr)
+library(numDeriv)
+library(Hmisc)
+library(plotMCMC)
+library(gridExtra)
+library(R2admb)
+library(tibble)
+library(tidyverse)
+library(car)
+library(MASS)
+library(stats4)
+library(readr)
+
+new_emerge <- read.csv(file = "~/Desktop/Dates_Fem.csv",
+                             header = TRUE,
+                             sep = ",",
+                             stringsAsFactors = FALSE)
+
+
+#initial view
+ggplot(new_emerge,aes(x=ind_type,y=emerg_days,group=assem_type,color=assem_type,fill=assem_type))+geom_violin()
+```
+
+```{r}
+#running models
+m1a_emerge <- bglmer(emerg_days~assem_type*ind_type+(1|tank_num),data=new_emerge,family=Gamma(link="log"))
+summary(m1a_emerge)
+Anova(m1a_emerge, type="III")
+```
+
+
+```{r}
+m1b_emerge <- bglmer(emerg_days~assem_type*ind_type+(1|tank_num),data=new_emerge,family=gaussian(link="log"))
+summary(m1b_emerge)
+Anova(m1b_emerge, type="III")
+```
+
+
+```{r}
+m1c_emerge <- blmer(log(emerg_days)~assem_type*ind_type+(1|tank_num),data=new_emerge)
+summary(m1c_emerge)
+Anova(m1c_emerge, type="III")
+
+```
+
+
+```{r}
+#CI's and estimates
+Confint(m1c_emerge, estimate = TRUE)
+```
+
+
+```{r}
+m1d_emerge<-glmmTMB(emerg_days~assem_type*ind_type+(1|tank_num),data=new_emerge,family=nbinom1)
+summary(m1d_emerge)
+Anova(m1d_emerge, type="III")
+```
+
+
+```{r}
+#running blmer without logging the "days" 
+m1e_emerge <- blmer(emerg_days~assem_type*ind_type+(1|tank_num),data=new_emerge)
+summary(m1e_emerge)
+Anova(m1e_emerge, type="III")
+```
+
+```{r}
+ICtab(m1a_emerge,m1b_emerge,m1c_emerge,m1e_emerge,type="AICc")
+```
+
+```{r}
+#diagnostics of m1c_emerge (blmer with log(emerg_days))
+qqnorm(resid(m1c_emerge))
+qqline(resid(m1c_emerge))
+
+library(broom)
+sc1=ggplot(augment(m1c_emerge),
+       aes(x=.fitted,y=sqrt(abs(.resid/sd(.resid)))))+geom_point()+
+    geom_smooth(colour="red",alpha=0.3)+ggtitle("log(mass")+geom_hline(yintercept = 1)
+sc2=ggplot(augment(m1c_emerge),
+       aes(x=.fitted,y=.resid))+geom_point()+geom_hline(yintercept = 0)
+  
+grid.arrange(sc1,sc2,ncol=2)
+```
+
+```{r}
+#diagnostics of m1c_emerge
+qqnorm(resid(m1c_emerge))
+qqline(resid(m1c_emerge))
+
+```
+
+```{r}
+#Predicted values & CI's for m1c_emerge (blmer with log(emerg_days))
+dataset5=new_emerge
+boot_predict <- function(.) {
+  predict(., newdata=dataset5, re.form=NULL)
+}
+
+
+library(TMB)
+bootSummary <- function(merBoot) {
+  return(
+    data.frame(fit = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.5, na.rm=TRUE))),
+               lwr = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.025, na.rm=TRUE))),
+               upr = apply(merBoot$t, 2, function(x) as.numeric(quantile(x, probs=.975, na.rm=TRUE)))
+    )
+  )
+}
+
+
+
+merboot=bootMer(m1c_emerge, boot_predict, nsim=200, use.u=FALSE, type="parametric")
+bootstrap.PIs <- bootSummary(merboot)
+newemerge.frame=data.frame(dataset5,bootstrap.PIs)
+
+library(dplyr)
+library(tidyverse)
+newemerge.frame %>% 
+  group_by(ind_type,assem_type) %>% 
+  summarise(fit = mean(fit),lwr=mean(lwr),upr=mean(upr)) -> newemerge.frame2
+newemerge.frame2
+
+
+
+#renaming factors 
+newemerge.frame2$assem_type<-as.factor(newemerge.frame2$assem_type)
+levels(newemerge.frame2$assem_type)<-list(Mixed="M",Single="S")
+newemerge.frame2$ind_type<-as.factor(newemerge.frame2$ind_type)
+levels(newemerge.frame2$ind_type)<-list(Nonlethal="NL", Control="C")
+str(newemerge.frame2)
+
+#transforming logged days
+newemerge.frame2$expfit <- exp(newemerge.frame2$fit)
+newemerge.frame2$explwr <- exp(newemerge.frame2$lwr)
+newemerge.frame2$expupr <- exp(newemerge.frame2$upr)
+newemerge.frame2
+
+
+
+```
+
+
+```{r}
+#plot for m1c_emerge
+ggplot(aes(x=ind_type, y=expfit, ymin=explwr, ymax=expupr, color=assem_type), data=newemerge.frame2) +
+  geom_point(size=4,position = position_dodge(w = 0.75))+
+  geom_errorbar(position = position_dodge(w = 0.75)) +
+  geom_line(aes(group=assem_type),position = position_dodge(w = 0.75))+
+  labs(colour="Assemblage Type",x="Induction Treatment", y="Time-to Emergence (days) w/ 95% PIs") +
+  theme_bw() +  theme(legend.position="right") +
+  scale_color_brewer(type = "qual", palette = 2)
+  
+
+```
+
+
+
+#Plot for m1c_emerge 
+library(ggplot2)
+ggplot(aes(x=ind_type, y=fit, ymin=lwr, ymax=upr, color=assem_type), data=newemerge.frame2) +
+  geom_point(size=4,position = position_dodge(w = 0.75))+
+  geom_errorbar(position = position_dodge(w = 0.75)) +
+  geom_line(aes(group=assem_type),position = position_dodge(w = 0.75))+
+  labs(x="Induction Type", y="Response w/95% PI's") +
+  theme_bw() +  theme(legend.position="right") +
+  scale_color_brewer(type = "qual", palette = 2)
+
+
+
+
+
+
+
+
+
+
+
+
